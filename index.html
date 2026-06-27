@@ -56,11 +56,11 @@
 <div class="wrap">
   <nav class="nav">
     <span class="brand">📄 Statement → CSV</span>
-    <span class="tag">BCA · BNI · Mandiri · runs locally in your browser</span>
+    <span class="tag">BCA · BNI · Mandiri · BRI · runs locally in your browser</span>
   </nav>
 
   <h1>Bank Statement → CSV</h1>
-  <p class="sub">Drop a BCA, BNI, or Mandiri statement PDF — the bank is detected automatically. Your file never leaves this device.</p>
+  <p class="sub">Drop a BCA, BNI, Mandiri, or BRI statement PDF — the bank is detected automatically. Your file never leaves this device.</p>
 
   <div class="card">
     <div class="seg" id="seg">
@@ -68,10 +68,11 @@
       <button data-bank="BNI">BNI</button>
       <button data-bank="BCA">BCA</button>
       <button data-bank="MDR">Mandiri</button>
+      <button data-bank="BRI">BRI</button>
     </div>
     <label id="drop" for="file">
       <div>Drop your <strong>PDF</strong> here, or click to choose</div>
-      <div class="hint">BCA e-statement (Mutasi Rekening), BNI account statement, or Mandiri Rekening Koran</div>
+      <div class="hint">BCA Mutasi Rekening, BNI account statement, Mandiri Rekening Koran, or BRI Laporan Transaksi</div>
     </label>
     <input type="file" id="file" accept="application/pdf">
     <div class="row">
@@ -93,7 +94,7 @@
     </div>
   </div>
 
-  <footer>BCA: Saldo derived from Saldo Awal ± Mutasi. BNI: Amount derived from balance movement. Mandiri: uses the statement's printed running balance. All validated against the statement's own printed balances.</footer>
+  <footer>BCA: Saldo derived from Saldo Awal ± Mutasi. BNI: Amount derived from balance movement. Mandiri &amp; BRI: use the statement's printed running balance. All validated against the statement's own printed balances. (BRI's SEQ / KODE_TRAN columns are internal codes not present in the PDF, so they are left blank.)</footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
@@ -292,10 +293,57 @@ function mdrParse(d){
            rows, delim:";", ketCol:3, extra:`Account: <b>${acct}</b>` };
 }
 
+/* ============================ BRI ============================ */
+const BRI_AMT=/^[\d,]+\.\d{2}$/, BRI_MAIN=/^(\d{2}\/\d{2}\/\d{2})\s+(\d{2}:\d{2}:\d{2})\s+(.*)$/;
+
+async function briData(pdf){
+  let norek=""; const lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const tc=await (await pdf.getPage(p)).getTextContent();
+    const pls=bcaPageLines(tc.items);
+    for(const l of pls){ if(!norek && l.startsWith("No. Rekening")){ const m=l.match(/:\s*(\d+)/); if(m) norek=m[1]; } }
+    let h=pls.findIndex(l=>l.startsWith("Transaction Date"));
+    for(let i=(h>=0?h+1:0);i<pls.length;i++){ const l=pls[i]; if(/^(Halaman|Page |Bersambung)/.test(l)) continue; lines.push(l); }
+    setStatus(`Reading PDF… page ${p}/${pdf.numPages}`,"busy");
+  }
+  return {lines, norek};
+}
+function briFmt(v){ const s=v.toFixed(2); return s.startsWith("0.")?s.slice(1):s; }
+function briParse(d){
+  const {lines, norek}=d; const txns=[]; let cur=null;
+  for(const l of lines){
+    const m=l.match(BRI_MAIN); const toks=l.split(/\s+/);
+    if(m && toks.filter(t=>BRI_AMT.test(t)).length>=3){
+      if(cur) txns.push(cur);
+      const rt=m[3].split(/\s+/);
+      const amts=rt.filter(t=>BRI_AMT.test(t));
+      const [deb,kre,sal]=amts.slice(-3).map(a=>parseFloat(a.replace(/,/g,"")));
+      const idx=rt.length-3;
+      const teller=idx-1>=0?rt[idx-1]:"";
+      const desc=rt.slice(0,idx-1).join(" ");
+      const [dd,mm,yy]=m[1].split("/");
+      cur={date:`20${yy}-${mm}-${dd} ${m[2]}`, jam:String(parseInt(m[2].replace(/:/g,""),10)),
+           desc, esb:"", deb, kre, sal, teller};
+    } else if(cur){ cur.esb=(cur.esb+" "+l).trim(); }
+  }
+  if(cur) txns.push(cur);
+  const rows=txns.map((t,i)=>{
+    const awal=t.sal-t.kre+t.deb;
+    const desk=(t.desc+" "+t.esb).trim();
+    return [String(i+1),norek,t.date,t.date,t.jam,"",desk,briFmt(awal),briFmt(t.deb),
+            briFmt(t.kre),briFmt(t.sal), t.kre>0?"Cr":"Db", t.teller,"","", t.desc,t.esb,""];
+  });
+  return { headers:["ID","NOREK","TGL_TRAN","TGL_EFEKTIF","JAM_TRAN","SEQ","DESK_TRAN",
+    "SALDO_AWAL_MUTASI","MUTASI_DEBET","MUTASI_KREDIT","SALDO_AKHIR_MUTASI","GLSIGN",
+    "TRUSER","KODE_TRAN","KODE_TRAN_TELLER","TRREMK","TLBDS1","TLBDS2"],
+    rows, delim:",", quoteAll:true, ketCol:6, extra:`NoRek: <b>${norek}</b>` };
+}
+
 /* ============================ detection ============================ */
 async function detectBank(pdf){
   const tc=await (await pdf.getPage(1)).getTextContent();
   const txt=tc.items.map(i=>i.str).join(" ");
+  if(/LAPORAN TRANSAKSI FINANSIAL|Uraian Transaksi|STATEMENT OF FINANCIAL/i.test(txt)) return "BRI";
   if(/Rekening Koran|Date & Time Value Date|MCM InhouseTrf/i.test(txt)) return "MDR";
   if(/TANGGAL KETERANGAN|REKENING GIRO|Mutasi Rekening|MATA UANG/i.test(txt)) return "BCA";
   if(/Ledger Balance|Posting Date|DB\/CR|ACCOUNT STATEMENT/i.test(txt)) return "BNI";
@@ -303,8 +351,10 @@ async function detectBank(pdf){
 }
 
 /* ============================ CSV + UI ============================ */
-function toCSV(headers, rows, delim){
-  const esc=v=>{ v=String(v); return new RegExp("["+delim+'"\\n]').test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+function toCSV(headers, rows, delim, quoteAll){
+  const esc=v=>{ v=String(v);
+    if(quoteAll) return '"'+v.replace(/"/g,'""')+'"';
+    return new RegExp("["+delim+'"\\n]').test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
   const out=[headers.map(esc).join(delim)];
   for(const r of rows) out.push(r.map(esc).join(delim));
   return "﻿"+out.join("\r\n");
@@ -356,13 +406,14 @@ $("convert").addEventListener("click",async()=>{
     let result;
     if(bank==="BNI"){ result=bniParse(await bniWords(pdf)); }
     else if(bank==="MDR"){ result=mdrParse(await mdrData(pdf)); }
+    else if(bank==="BRI"){ result=briParse(await briData(pdf)); }
     else { const {lines,year}=await bcaLines(pdf); result=bcaParse(lines,year); }
 
     setStatus("Parsing transactions…","busy");
     if(!result.rows.length){ setStatus(`No transactions found — is this a ${bank} statement?`,"err"); $("convert").disabled=false; return; }
 
-    csvText=toCSV(result.headers, result.rows, result.delim);
-    const LABEL={BNI:"BNI",BCA:"BCA",MDR:"Mandiri"};
+    csvText=toCSV(result.headers, result.rows, result.delim, result.quoteAll);
+    const LABEL={BNI:"BNI",BCA:"BCA",MDR:"Mandiri",BRI:"BRI"};
     $("bankBadge").textContent=(LABEL[bank]||bank)+(chosen==="auto"?" (auto)":"");
     $("count").textContent=result.rows.length;
     $("extra").innerHTML=result.extra||"";
