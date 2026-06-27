@@ -1,7 +1,9 @@
 # Bank Statement → CSV
 
 Convert Indonesian bank **e-statement PDFs** into clean CSV for bookkeeping.
-Supports **BCA**, **BNI**, and **Mandiri**.
+Supports **BCA**, **BNI**, **Mandiri**, and **BRI**.
+
+Live web app: https://gazafernanda.github.io/bank-statement-converter/
 
 There are two ways to use it:
 
@@ -27,9 +29,10 @@ pip install pdfplumber
 ```
 
 ```bash
-python3 bca_statement_to_csv.py      "BCA e-statement.pdf"      [output.csv]
-python3 bni_statement_to_csv.py      "BNI statement.pdf"        [output.csv]
+python3 bca_statement_to_csv.py      "BCA e-statement.pdf"        [output.csv]
+python3 bni_statement_to_csv.py      "BNI statement.pdf"          [output.csv]
 python3 mandiri_statement_to_csv.py  "Mandiri Rekening Koran.pdf" [output.csv]
+python3 bri_statement_to_csv.py      "BRI Laporan Transaksi.pdf"  [output.csv]
 ```
 
 Each script writes `<input>_converted.csv` next to the input if no output path
@@ -45,6 +48,10 @@ Each parser is validated against the statement's own printed balances:
   (the PDF's amount column is unreliable).
 - **Mandiri** — uses the statement's printed running balance directly; validated
   against `Opening Balance ± Credit/Debit` and the `Closing Balance`.
+- **BRI** — uses the statement's printed running balance; all financial fields
+  validated 100% against the example export. Note: `SEQ`, `KODE_TRAN` and
+  `KODE_TRAN_TELLER` are internal BRI system codes that do **not** appear in the
+  PDF, so those columns are left blank.
 
 ## Privacy
 
