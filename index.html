@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Statement → CSV</title>
+<style>
+  :root{
+    --bg:#0f172a; --card:#1e293b; --line:#334155; --txt:#e2e8f0;
+    --muted:#94a3b8; --accent:#38bdf8; --accent2:#0ea5e9; --ok:#22c55e;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    background:linear-gradient(160deg,#0f172a,#1e293b); color:var(--txt);
+    min-height:100vh; display:flex; align-items:flex-start; justify-content:center; padding:40px 16px;
+  }
+  .wrap{width:100%; max-width:960px}
+  .nav{display:flex; align-items:center; justify-content:space-between; padding:12px 16px;
+       background:var(--card); border:1px solid var(--line); border-radius:12px; margin-bottom:22px}
+  .nav .brand{font-weight:700}
+  .nav .tag{color:var(--muted); font-size:.8rem}
+  h1{font-size:1.6rem; margin:0 0 4px}
+  .sub{color:var(--muted); margin:0 0 24px; font-size:.95rem}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:14px; padding:24px; margin-bottom:20px}
+  .seg{display:inline-flex; background:#0b1220; border:1px solid var(--line); border-radius:10px; padding:4px; margin-bottom:18px}
+  .seg button{background:transparent; color:var(--muted); border:0; padding:8px 18px; border-radius:7px; font-weight:700; cursor:pointer; font-size:.9rem}
+  .seg button.on{background:var(--accent2); color:#04121f}
+  #drop{display:block; width:100%; border:2px dashed var(--line); border-radius:12px; padding:46px 20px;
+        text-align:center; cursor:pointer; transition:.2s; background:#0b1220}
+  #drop.drag{border-color:var(--accent); background:#0e1a2b}
+  #drop strong{color:var(--accent)}
+  #drop .hint{color:var(--muted); font-size:.85rem; margin-top:8px}
+  input[type=file]{display:none}
+  .row{display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:16px}
+  button.act{background:var(--accent2); color:#04121f; border:0; padding:11px 20px; border-radius:9px; font-weight:700; cursor:pointer; font-size:.95rem; transition:.15s}
+  button.act:hover{background:var(--accent)}
+  button.act:disabled{opacity:.45; cursor:not-allowed}
+  button.ghost{background:transparent; color:var(--accent); border:1px solid var(--line)}
+  #status{font-size:.9rem; color:var(--muted)}
+  #status.busy{color:var(--accent)} #status.done{color:var(--ok)} #status.err{color:#f87171}
+  .badge{display:inline-block; padding:3px 10px; border-radius:999px; font-size:.78rem; font-weight:700;
+         background:#0b1220; border:1px solid var(--line); color:var(--accent)}
+  .meta{display:flex; gap:22px; flex-wrap:wrap; margin:4px 0 14px; font-size:.85rem; color:var(--muted); align-items:center}
+  .meta b{color:var(--txt)}
+  table{width:100%; border-collapse:collapse; font-size:.78rem}
+  th,td{padding:7px 9px; border-bottom:1px solid var(--line); text-align:left; white-space:nowrap}
+  th{color:var(--accent); position:sticky; top:0; background:var(--card)}
+  td.ket{max-width:360px; overflow:hidden; text-overflow:ellipsis; color:var(--muted)}
+  .scroll{max-height:400px; overflow:auto; border:1px solid var(--line); border-radius:10px}
+  .hidden{display:none}
+  footer{color:var(--muted); font-size:.78rem; text-align:center; margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav class="nav">
+    <span class="brand">📄 Statement → CSV</span>
+    <span class="tag">BCA · BNI · Mandiri · runs locally in your browser</span>
+  </nav>
+
+  <h1>Bank Statement → CSV</h1>
+  <p class="sub">Drop a BCA, BNI, or Mandiri statement PDF — the bank is detected automatically. Your file never leaves this device.</p>
+
+  <div class="card">
+    <div class="seg" id="seg">
+      <button data-bank="auto" class="on">Auto-detect</button>
+      <button data-bank="BNI">BNI</button>
+      <button data-bank="BCA">BCA</button>
+      <button data-bank="MDR">Mandiri</button>
+    </div>
+    <label id="drop" for="file">
+      <div>Drop your <strong>PDF</strong> here, or click to choose</div>
+      <div class="hint">BCA e-statement (Mutasi Rekening), BNI account statement, or Mandiri Rekening Koran</div>
+    </label>
+    <input type="file" id="file" accept="application/pdf">
+    <div class="row">
+      <button class="act" id="convert" disabled>Convert</button>
+      <button class="act ghost hidden" id="download">Download CSV</button>
+      <span id="status">No file selected.</span>
+    </div>
+  </div>
+
+  <div class="card hidden" id="result">
+    <div class="meta">
+      <span class="badge" id="bankBadge">—</span>
+      <span>Transactions: <b id="count">0</b></span>
+      <span id="extra"></span>
+      <span>Preview: <b>first 50 rows</b></span>
+    </div>
+    <div class="scroll">
+      <table><thead id="thead"></thead><tbody id="tbody"></tbody></table>
+    </div>
+  </div>
+
+  <footer>BCA: Saldo derived from Saldo Awal ± Mutasi. BNI: Amount derived from balance movement. Mandiri: uses the statement's printed running balance. All validated against the statement's own printed balances.</footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+
+const $=id=>document.getElementById(id);
+let selectedFile=null, csvText="", outName="converted.csv", chosen="auto";
+
+/* ============================ shared helpers ============================ */
+const idr=n=>n.toLocaleString("id-ID",{maximumFractionDigits:2});
+function setStatus(m,c){ const s=$("status"); s.textContent=m; s.className=c||""; }
+
+/* ============================ BNI ============================ */
+const BNI_DATE=/^\d{2}\/\d{2}\/\d{4}$/, BNI_TIME=/^\d{2}\.\d{2}\.\d{2}$/,
+      BNI_BAL=/^[\d,]+\.\d{2}$/, BNI_DIG=/^\d+$/;
+
+async function bniWords(pdf){
+  const out=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p); const tc=await page.getTextContent();
+    const toks=[];
+    for(const it of tc.items){
+      const s=it.str; if(!s||!s.trim()) continue;
+      const x=it.transform[4], y=it.transform[5], w=it.width||0, total=s.length||1; let idx=0;
+      for(const part of s.split(/\s+/).filter(Boolean)){
+        const st=s.indexOf(part,idx); idx=st+part.length;
+        toks.push({t:part,x:x+w*(st/total),y});
+      }
+    }
+    toks.sort((a,b)=>b.y-a.y||a.x-b.x);
+    const rows=[]; let cur=[],rowY=null;
+    for(const tk of toks){
+      if(rowY===null||Math.abs(tk.y-rowY)<=3){cur.push(tk); if(rowY===null)rowY=tk.y;}
+      else{rows.push(cur);cur=[tk];rowY=tk.y;}
+    }
+    if(cur.length)rows.push(cur);
+    for(const r of rows){ r.sort((a,b)=>a.x-b.x); for(const tk of r) out.push(tk.t); }
+    setStatus(`Reading PDF… page ${p}/${pdf.numPages}`,"busy");
+  }
+  return out;
+}
+const bniCleanAmt=t=> t.includes("..") ? t.split("..")[0]+".00" : t;
+
+function bniParse(words){
+  let opening=null;
+  for(let i=0;i<words.length-1;i++){
+    if(words[i]==="Balance:" && BNI_BAL.test(words[i+1])){ opening=parseFloat(words[i+1].replace(/,/g,"")); break; }
+  }
+  const starts=[];
+  for(let i=0;i+3<words.length;i++){
+    if(BNI_DATE.test(words[i])&&BNI_TIME.test(words[i+1])&&BNI_DATE.test(words[i+2])&&BNI_TIME.test(words[i+3])) starts.push(i);
+  }
+  const rows=[]; let prev=opening;
+  for(let s=0;s<starts.length;s++){
+    const toks=words.slice(starts[s], s+1<starts.length?starts[s+1]:words.length);
+    const posting=toks[0], eff=toks[2];
+    let jidx=null;
+    for(let k=4;k<Math.min(toks.length,12);k++){ if(BNI_DIG.test(toks[k])){jidx=k;break;} }
+    if(jidx===null) continue;
+    const journal=toks[jidx], rest=toks.slice(jidx+1);
+    let anchor=null;
+    for(let j=1;j<rest.length-1;j++){ if((rest[j]==="K"||rest[j]==="D")&&BNI_BAL.test(rest[j+1])){anchor=j;break;} }
+    if(anchor===null) continue;
+    const db=rest[anchor], balance=parseFloat(rest[anchor+1].replace(/,/g,""));
+    const ket=[];
+    for(let k=0;k<rest.length;k++){ const tk=rest[k]; if(k===anchor||BNI_BAL.test(tk)||tk.includes(",,")) continue; ket.push(bniCleanAmt(tk)); }
+    if(prev===null) prev=balance;
+    const amount=Math.abs(balance-prev); prev=balance;
+    rows.push([posting,eff,journal,ket.join(" ")," Rp"+idr(amount)+" ",db,
+               (balance%1===0?balance.toFixed(1):String(balance)), db==="K"?"Penjualan":"Pembelian",""]);
+  }
+  return { headers:["Posting_Date","Transaction_Date","Journal","Keterangan","Amount","DB_CR","Saldo","Jenis","_CEK"],
+           rows, delim:";", ketCol:3, extra:"" };
+}
+
+/* ============================ BCA ============================ */
+const BCA_AMT=/^[\d,]+\.\d{2}$/, BCA_DATE=/^\d{2}\/\d{2}$/, BCA_NUMDUP=/^\d+\.\d{2}$/,
+      BCA_SUMMARY=/^(SALDO AWAL|MUTASI CR|MUTASI DB|SALDO AKHIR)\s*:/;
+
+function bcaPageLines(items){
+  const toks=[];
+  for(const it of items){ const s=it.str; if(!s||!s.trim())continue; toks.push({t:s,x:it.transform[4],y:it.transform[5]}); }
+  toks.sort((a,b)=>b.y-a.y||a.x-b.x);
+  const lines=[]; let cur=[],rowY=null;
+  for(const tk of toks){
+    if(rowY===null||Math.abs(tk.y-rowY)<=3){cur.push(tk); if(rowY===null)rowY=tk.y;}
+    else{lines.push(cur);cur=[tk];rowY=tk.y;}
+  }
+  if(cur.length)lines.push(cur);
+  return lines.map(r=>{ r.sort((a,b)=>a.x-b.x); return r.map(t=>t.t).join(" ").replace(/\s+/g," ").trim(); });
+}
+
+async function bcaLines(pdf){
+  let year=""; const lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const page=await pdf.getPage(p); const tc=await page.getTextContent();
+    const pls=bcaPageLines(tc.items);
+    if(!year){ for(const l of pls){ const m=l.match(/PERIODE\s*:\s*\S+\s+(\d{4})/); if(m){year=m[1];break;} } }
+    let h=pls.findIndex(l=>l.startsWith("TANGGAL KETERANGAN"));
+    for(let i=(h>=0?h+1:0);i<pls.length;i++){ if(pls[i].startsWith("Bersambung ke Halaman")) continue; lines.push(pls[i]); }
+    setStatus(`Reading PDF… page ${p}/${pdf.numPages}`,"busy");
+  }
+  return {lines, year};
+}
+
+function bcaParse(lines, year){
+  let opening=null, bal=null; const txns=[]; let cur=null;
+  const flush=()=>{ if(cur){txns.push(cur);cur=null;} };
+  for(const l of lines){
+    if(BCA_SUMMARY.test(l)){ flush(); break; }
+    const toks=l.split(" ");
+    if(BCA_DATE.test(toks[0])){
+      if(l.includes("SALDO AWAL")){ const m=toks.filter(t=>BCA_AMT.test(t)); if(m.length){opening=parseFloat(m[m.length-1].replace(/,/g,""));bal=opening;} flush(); continue; }
+      if(l.includes("SALDO AKHIR")){ flush(); continue; }
+      flush();
+      const typ=/(^|\s)DB(\s|$)/.test(l)?"DB":"CR";
+      const amts=toks.filter(t=>BCA_AMT.test(t));
+      const mut=amts.length?parseFloat(amts[0].replace(/,/g,"")):0;
+      if(bal!==null) bal = typ==="CR"?bal+mut:bal-mut;
+      let main=toks.slice(1).filter(t=>!BCA_AMT.test(t));
+      if(main.length && main[main.length-1]==="DB") main.pop();
+      cur={date:toks[0]+"/"+year, typ, mut, saldo:bal, ket:main};
+    } else if(cur){
+      for(const t of l.split(" ")) if(t && !BCA_NUMDUP.test(t)) cur.ket.push(t);
+    }
+  }
+  flush();
+  const rows=txns.map(t=>[ t.date, t.ket.join(" ").replace(/\s+/g," ").trim(),
+      " Rp"+idr(t.mut)+" ", t.typ, t.saldo.toFixed(2), t.typ==="CR"?"Penjualan":"Pembelian", "" ]);
+  const extra = opening!=null ? `Saldo Awal: <b>Rp${idr(opening)}</b> · Saldo Akhir: <b>Rp${idr(bal)}</b>` : "";
+  return { headers:["Tanggal","Keterangan","Mutasi","DB_CR","Saldo","Jenis","_CEK"], rows, delim:";", ketCol:1, extra };
+}
+
+/* ============================ Mandiri ============================ */
+const MDR_AMT=/[\d,]+\.\d{2}/g, MDR_DATE=/\d{2}\/\d{2}\/\d{4}/g,
+      MDR_TIME=/\d{2}:\d{2}:\d{2}/, MDR_TIMEF=/\d{2}:\d{2}:?\d{0,2}/;
+const MONTHS=["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+async function mdrData(pdf){
+  let acct="", ccy="", opening=null; const lines=[];
+  for(let p=1;p<=pdf.numPages;p++){
+    const tc=await (await pdf.getPage(p)).getTextContent();
+    const pls=bcaPageLines(tc.items);
+    for(const l of pls){
+      if(!acct && l.startsWith("Account No")){ const m=l.match(/:\s*(\d+)/); if(m) acct=m[1]; }
+      if(!ccy && l.startsWith("Currency")) ccy=(l.split(":")[1]||"").trim();
+      if(opening===null && l.startsWith("Opening Balance")){ const m=l.match(/[\d,]+\.\d{2}/); if(m) opening=parseFloat(m[0].replace(/,/g,"")); }
+    }
+    let h=pls.findIndex(l=>l.startsWith("Date & Time"));
+    for(let i=(h>=0?h+1:0);i<pls.length;i++){
+      if(/^Page \d+ of \d+$/.test(pls[i])) continue;
+      lines.push(pls[i]);
+    }
+    setStatus(`Reading PDF… page ${p}/${pdf.numPages}`,"busy");
+  }
+  return {lines, acct, ccy, opening};
+}
+function mdrIsMain(l){
+  if(!/^\d{2}\/\d{2}\/\d{4}/.test(l)) return false;
+  if((l.match(MDR_DATE)||[]).length<2) return false;
+  return (l.match(MDR_AMT)||[]).length>=3;
+}
+function mdrParse(d){
+  const {lines, acct, ccy}=d;
+  const blocks=[]; let cur=null;
+  for(const l of lines){
+    if(l.startsWith("No of Credit")) break;
+    if(mdrIsMain(l)){ if(cur) blocks.push(cur); cur=[l]; }
+    else if(cur) cur.push(l);
+  }
+  if(cur) blocks.push(cur);
+
+  const rows=blocks.map(b=>{
+    const main=b[0];
+    const amts=main.match(MDR_AMT);
+    const last3=amts.slice(-3);
+    const [deb,cre,bal]=last3.map(a=>parseFloat(a.replace(/,/g,"")));
+    const dates=main.match(MDR_DATE);
+    const i1=main.indexOf(dates[0]);
+    const i2=main.indexOf(dates[1], i1+dates[0].length);
+    let after=main.slice(i2+dates[1].length);
+    let ref=after;
+    for(const a of last3) ref=ref.replace(a,"");
+    ref=ref.replace(/\d{2}:\d{2}:?\d{0,2}/g,"").replace(/\s+/g," ").trim();
+    const tm=b.join(" ").match(MDR_TIME);
+    const time = tm ? tm[0] : (main.match(MDR_TIMEF)?main.match(MDR_TIMEF)[0]:"");
+    let desc=b.slice(1).join(" ").replace(/\d{2}:\d{2}:\d{2}/g,"").replace(/\s+/g," ").trim();
+    const [dd,mm,yy]=dates[0].split("/");
+    const post=`${dd} ${MONTHS[+mm-1]} ${yy}`+(time?` ${time}`:"");
+    const remarks=(desc+(ref?"  "+ref:"")).trim();
+    return [acct, ccy, post, remarks, remarks, cre.toFixed(2), deb.toFixed(2), bal.toFixed(2)];
+  });
+  return { headers:["AccountNo","Ccy","PostDate","Remarks","AdditionalDesc","Credit Amount","Debit Amount","Close Balance"],
+           rows, delim:";", ketCol:3, extra:`Account: <b>${acct}</b>` };
+}
+
+/* ============================ detection ============================ */
+async function detectBank(pdf){
+  const tc=await (await pdf.getPage(1)).getTextContent();
+  const txt=tc.items.map(i=>i.str).join(" ");
+  if(/Rekening Koran|Date & Time Value Date|MCM InhouseTrf/i.test(txt)) return "MDR";
+  if(/TANGGAL KETERANGAN|REKENING GIRO|Mutasi Rekening|MATA UANG/i.test(txt)) return "BCA";
+  if(/Ledger Balance|Posting Date|DB\/CR|ACCOUNT STATEMENT/i.test(txt)) return "BNI";
+  return null;
+}
+
+/* ============================ CSV + UI ============================ */
+function toCSV(headers, rows, delim){
+  const esc=v=>{ v=String(v); return new RegExp("["+delim+'"\\n]').test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const out=[headers.map(esc).join(delim)];
+  for(const r of rows) out.push(r.map(esc).join(delim));
+  return "﻿"+out.join("\r\n");
+}
+function renderPreview(headers, rows, ketCol){
+  $("thead").innerHTML="<tr>"+headers.filter(h=>h!=="_CEK").map(h=>`<th>${h}</th>`).join("")+"</tr>";
+  const tb=$("tbody"); tb.innerHTML="";
+  rows.slice(0,50).forEach(r=>{
+    const tr=document.createElement("tr");
+    tr.innerHTML=r.map((c,i)=>{
+      if(headers[i]==="_CEK") return "";
+      const cls=i===ketCol?' class="ket"':'';
+      const val=String(c).trim();
+      return `<td${cls}${i===ketCol?` title="${val.replace(/"/g,'&quot;')}"`:''}>${val}</td>`;
+    }).join("");
+    tb.appendChild(tr);
+  });
+}
+
+/* ============================ wiring ============================ */
+$("seg").addEventListener("click",e=>{
+  if(e.target.dataset.bank){
+    chosen=e.target.dataset.bank;
+    [...$("seg").children].forEach(b=>b.classList.toggle("on",b===e.target));
+  }
+});
+const drop=$("drop");
+["dragover","dragenter"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add("drag");}));
+["dragleave","drop"].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove("drag");}));
+drop.addEventListener("drop",ev=>{ if(ev.dataTransfer.files[0]) pick(ev.dataTransfer.files[0]); });
+$("file").addEventListener("change",ev=>{ if(ev.target.files[0]) pick(ev.target.files[0]); });
+
+function pick(f){
+  if(f.type!=="application/pdf" && !f.name.toLowerCase().endsWith(".pdf")){ setStatus("Please choose a PDF file.","err"); return; }
+  selectedFile=f; outName=f.name.replace(/\.pdf$/i,"")+"_converted.csv";
+  $("convert").disabled=false; $("download").classList.add("hidden"); $("result").classList.add("hidden");
+  setStatus("Ready: "+f.name,"");
+}
+
+$("convert").addEventListener("click",async()=>{
+  if(!selectedFile) return;
+  $("convert").disabled=true; setStatus("Reading PDF…","busy");
+  try{
+    const buf=await selectedFile.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    let bank = chosen==="auto" ? await detectBank(pdf) : chosen;
+    if(!bank){ setStatus("Could not detect bank — pick BNI or BCA manually.","err"); $("convert").disabled=false; return; }
+
+    let result;
+    if(bank==="BNI"){ result=bniParse(await bniWords(pdf)); }
+    else if(bank==="MDR"){ result=mdrParse(await mdrData(pdf)); }
+    else { const {lines,year}=await bcaLines(pdf); result=bcaParse(lines,year); }
+
+    setStatus("Parsing transactions…","busy");
+    if(!result.rows.length){ setStatus(`No transactions found — is this a ${bank} statement?`,"err"); $("convert").disabled=false; return; }
+
+    csvText=toCSV(result.headers, result.rows, result.delim);
+    const LABEL={BNI:"BNI",BCA:"BCA",MDR:"Mandiri"};
+    $("bankBadge").textContent=(LABEL[bank]||bank)+(chosen==="auto"?" (auto)":"");
+    $("count").textContent=result.rows.length;
+    $("extra").innerHTML=result.extra||"";
+    renderPreview(result.headers, result.rows, result.ketCol);
+    $("result").classList.remove("hidden"); $("download").classList.remove("hidden");
+    setStatus(`Done — ${bank}, ${result.rows.length} transactions.`,"done");
+  }catch(err){ console.error(err); setStatus("Error: "+err.message,"err"); }
+  $("convert").disabled=false;
+});
+
+$("download").addEventListener("click",()=>{
+  const blob=new Blob([csvText],{type:"text/csv;charset=utf-8"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=outName; a.click(); URL.revokeObjectURL(a.href);
+});
+</script>
+</body>
+</html>

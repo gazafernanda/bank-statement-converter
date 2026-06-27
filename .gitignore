@@ -1,0 +1,9 @@
+# Never commit bank data
+*.pdf
+*.csv
+
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
