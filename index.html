@@ -256,11 +256,16 @@ async function mdrData(pdf){
 }
 function mdrIsMain(l){
   if(!/^\d{2}\/\d{2}\/\d{4}/.test(l)) return false;
+  // A real transaction row carries both the posting date and the value date.
   if((l.match(MDR_DATE)||[]).length<2) return false;
-  return (l.match(MDR_AMT)||[]).length>=3;
+  // At minimum it prints the running balance. We deliberately accept rows with
+  // a single amount: when one of Debit/Credit is blank (or the PDF splits a big
+  // amount across a space) only the balance survives as a clean token, and a
+  // stricter ">=3 amounts" rule would silently drop the whole transaction.
+  return (l.match(MDR_AMT)||[]).length>=1;
 }
 function mdrParse(d){
-  const {lines, acct, ccy}=d;
+  const {lines, acct, ccy, opening}=d;
   const blocks=[]; let cur=null;
   for(const l of lines){
     if(l.startsWith("No of Credit")) break;
@@ -269,25 +274,45 @@ function mdrParse(d){
   }
   if(cur) blocks.push(cur);
 
+  // Scrub money- and time-shaped tokens (incl. split fragments like
+  // "100,000,007.0") out of free-text so leaked amounts don't pollute remarks.
+  const stripNoise=s=>s.replace(/[\d,]+\.\d+/g,"")
+                       .replace(/\d{2}:\d{2}:?\d{0,2}/g,"")
+                       .replace(/\s+/g," ").trim();
+
+  let prev=opening;
   const rows=blocks.map(b=>{
     const main=b[0];
-    const amts=main.match(MDR_AMT);
-    const last3=amts.slice(-3);
-    const [deb,cre,bal]=last3.map(a=>parseFloat(a.replace(/,/g,"")));
+    const amts=main.match(MDR_AMT)||[];
+    // The running balance is the last amount printed on the row; it survives PDF
+    // extraction noise far more reliably than the individual debit/credit cells.
+    const bal=amts.length?parseFloat(amts[amts.length-1].replace(/,/g,"")):NaN;
+    // Derive Credit/Debit from the balance movement instead of trusting the
+    // debit/credit tokens by position. This is immune to amounts the PDF splits
+    // across a space, blank columns, and timestamps (e.g. 16:40) that get
+    // misread as money — the same approach the BNI parser uses.
+    let cre=0, deb=0;
+    if(prev!=null && !isNaN(bal)){
+      const delta=Math.round((bal-prev)*100)/100;
+      if(delta>=0) cre=delta; else deb=-delta;
+    } else {
+      const last3=amts.slice(-3).map(a=>parseFloat(a.replace(/,/g,"")));
+      if(last3.length>=3){ deb=last3[0]; cre=last3[1]; }
+    }
+    if(!isNaN(bal)) prev=bal;
+
     const dates=main.match(MDR_DATE);
     const i1=main.indexOf(dates[0]);
     const i2=main.indexOf(dates[1], i1+dates[0].length);
-    let after=main.slice(i2+dates[1].length);
-    let ref=after;
-    for(const a of last3) ref=ref.replace(a,"");
-    ref=ref.replace(/\d{2}:\d{2}:?\d{0,2}/g,"").replace(/\s+/g," ").trim();
+    const ref=stripNoise(main.slice(i2+dates[1].length));
     const tm=b.join(" ").match(MDR_TIME);
     const time = tm ? tm[0] : (main.match(MDR_TIMEF)?main.match(MDR_TIMEF)[0]:"");
-    let desc=b.slice(1).join(" ").replace(/\d{2}:\d{2}:\d{2}/g,"").replace(/\s+/g," ").trim();
+    const desc=stripNoise(b.slice(1).join(" "));
     const [dd,mm,yy]=dates[0].split("/");
     const post=`${dd} ${MONTHS[+mm-1]} ${yy}`+(time?` ${time}`:"");
     const remarks=(desc+(ref?"  "+ref:"")).trim();
-    return [acct, ccy, post, remarks, remarks, cre.toFixed(2), deb.toFixed(2), bal.toFixed(2)];
+    return [acct, ccy, post, remarks, remarks, cre.toFixed(2), deb.toFixed(2),
+            isNaN(bal)?"":bal.toFixed(2)];
   });
   return { headers:["AccountNo","Ccy","PostDate","Remarks","AdditionalDesc","Credit Amount","Debit Amount","Close Balance"],
            rows, delim:";", ketCol:3, extra:`Account: <b>${acct}</b>` };
