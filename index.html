@@ -355,8 +355,10 @@ function briParse(d){
   const rows=txns.map((t,i)=>{
     const awal=t.sal-t.kre+t.deb;
     const desk=(t.desc+" "+t.esb).trim();
+    // Cash (tunai) / e-wallet (dana) rows have no counterparty -> nodata
+    const trremk=/tunai|dana/i.test(desk)?"nodata":t.desc;
     return [String(i+1),norek,t.date,t.date,t.jam,"",desk,briFmt(awal),briFmt(t.deb),
-            briFmt(t.kre),briFmt(t.sal), t.kre>0?"Cr":"Db", t.teller,"","", t.desc,t.esb,""];
+            briFmt(t.kre),briFmt(t.sal), t.kre>0?"Cr":"Db", t.teller,"","", trremk,t.esb,""];
   });
   return { headers:["ID","NOREK","TGL_TRAN","TGL_EFEKTIF","JAM_TRAN","SEQ","DESK_TRAN",
     "SALDO_AWAL_MUTASI","MUTASI_DEBET","MUTASI_KREDIT","SALDO_AKHIR_MUTASI","GLSIGN",

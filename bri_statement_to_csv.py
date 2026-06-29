@@ -74,15 +74,16 @@ def parse(lines, norek):
         txns.append(cur)
 
     rows = []
-    prev = None
     for i, t in enumerate(txns, 1):
         awal = t["sal"] - t["kre"] + t["deb"]
         desk = (t["desc"] + " " + t["esb"]).strip()
+        # Cash (tunai) / e-wallet (dana) rows have no counterparty -> nodata
+        trremk = "nodata" if re.search(r"tunai|dana", desk, re.I) else t["desc"]
         rows.append([
             str(i), norek, t["date"], t["date"], t["jam"], "",
             desk, fmt(awal), fmt(t["deb"]), fmt(t["kre"]), fmt(t["sal"]),
             "Cr" if t["kre"] > 0 else "Db", t["teller"], "", "",
-            t["desc"], t["esb"], "",
+            trremk, t["esb"], "",
         ])
     return rows
 

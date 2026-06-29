@@ -54,7 +54,7 @@ def is_main(l):
     return (DATE.match(l) and len(DATE.findall(l)) >= 2 and len(AMT.findall(l)) >= 3)
 
 
-def parse(lines, acct, ccy):
+def parse(lines, acct, ccy, opening=None):
     blocks = []
     cur = None
     for l in lines:
@@ -70,10 +70,23 @@ def parse(lines, acct, ccy):
         blocks.append(cur)
 
     rows = []
+    prev = opening
     for b in blocks:
         main = b[0]
         amts = AMT.findall(main)
-        deb, cre, bal = (float(a.replace(",", "")) for a in amts[-3:])
+        # Balance is the rightmost column -> the most reliable token.
+        bal = float(amts[-1].replace(",", ""))
+        # Derive Debit/Credit from the balance movement, not the (sometimes
+        # mangled) amount tokens. Falls back to parsed tokens only if we have
+        # no previous balance to diff against.
+        if prev is not None:
+            mut = round(bal - prev, 2)
+            cre = mut if mut >= 0 else 0.0
+            deb = -mut if mut < 0 else 0.0
+        else:
+            deb, cre = (float(a.replace(",", "")) for a in amts[-3:-1])
+        prev = bal
+
         dates = DATE.findall(main)
         i1 = main.index(dates[0])
         i2 = main.index(dates[1], i1 + len(dates[0]))
@@ -86,6 +99,10 @@ def parse(lines, acct, ccy):
         tm = TIME.search(" ".join(b))
         time = tm.group() if tm else (TIMEF.search(main).group() if TIMEF.search(main) else "")
         desc = TIME.sub("", " ".join(b[1:]))
+        # Drop amount-like tokens / stray zeros that can leak from the amount
+        # column into the description when a row's text is mangled.
+        desc = " ".join(t for t in desc.split()
+                        if not re.fullmatch(r"[\d,]+\.\d{1,2}", t) and t != "0")
         desc = re.sub(r"\s+", " ", desc).strip()
         dd, mm, yy = dates[0].split("/")
         post = f"{dd} {MONTHS[int(mm) - 1]} {yy}" + (f" {time}" if time else "")
@@ -104,7 +121,7 @@ def main():
 
     with pdfplumber.open(pdf_path) as pdf:
         lines, acct, ccy, opening = collect(pdf)
-    rows = parse(lines, acct, ccy)
+    rows = parse(lines, acct, ccy, opening)
     if not rows:
         sys.exit("No transactions found.")
 
